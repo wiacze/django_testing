@@ -1,104 +1,96 @@
-from django.contrib.auth import get_user_model
-from django.test import TestCase, Client
-from django.urls import reverse
 from http import HTTPStatus
+
 from pytils.translit import slugify
 
 from notes.models import Note
 from notes.forms import WARNING
+from .base import TestBase
 
 
-User = get_user_model()
+class TestLogic(TestBase):
 
+    def count_examination(self, create=False, delete=False):
+        count = self.DEFAULT_NOTES_COUNT
+        if create:
+            count += 1
+        if delete:
+            count -= 1
+        self.assertEqual(Note.objects.count(), count)
 
-class TestLogic(TestCase):
+    def identity_verification(self, new_note, form):
+        self.assertEqual(new_note.title, form['title'])
+        self.assertEqual(new_note.text, form['text'])
+        self.assertEqual(new_note.slug, form['slug'])
 
-    @classmethod
-    def setUpTestData(cls):
-        cls.first_user = User.objects.create(username='Первый пользователь')
-        cls.second_user = User.objects.create(username='Второй пользователь')
-        cls.first_client = Client()
-        cls.second_client = Client()
-        cls.first_client.force_login(cls.first_user)
-        cls.second_client.force_login(cls.second_user)
-        cls.note = Note.objects.create(
-            title='Заголовок',
-            text='Текст',
-            slug='slug',
-            author=cls.first_user,
+    def redirect_examination(
+        self, client, url, form, redirect_url, redirect=True
+    ):
+        response = client.post(
+            url, data=form
         )
-        cls.note_form = {
-            'title': 'Заголовок №2',
-            'text': 'Текст №2',
-            'slug': 'second-slug'
-        }
-        cls.edit_form = {
-            'title': 'Измененный заголовок',
-            'text': 'Измененный текст',
-            'slug': 'edit-slug'
-        }
-        cls.DEFAULT_NOTES_COUNT = Note.objects.count()
-        cls.ADD_URL = reverse('notes:add')
-        cls.SUCCESS_URL = reverse('notes:success')
-        cls.LOGIN_URL = reverse('users:login')
-        cls.EDIT_URL = reverse('notes:edit', args=(cls.note.slug,))
-        cls.DELETE_URL = reverse('notes:delete', args=(cls.note.slug,))
+        if redirect:
+            self.assertRedirects(response, redirect_url)
+        else:
+            self.assertEqual(response.status_code, redirect_url)
 
     def test_creation_by_auth_user(self):
-        response = self.first_client.post(
+        self.redirect_examination(
+            self.author_client,
             self.ADD_URL,
-            data=self.note_form
+            self.note_form,
+            self.SUCCESS_URL
         )
-        self.assertRedirects(response, self.SUCCESS_URL)
-        self.assertEqual(Note.objects.count(), self.DEFAULT_NOTES_COUNT + 1)
         new_note = Note.objects.order_by('id').last()
-        self.assertEqual(new_note.title, self.note_form['title'])
-        self.assertEqual(new_note.text, self.note_form['text'])
-        self.assertEqual(new_note.slug, self.note_form['slug'])
-        self.assertEqual(new_note.author, self.first_user)
+        self.identity_verification(new_note, self.note_form)
+        self.count_examination(create=True)
+        self.assertEqual(new_note.author, self.author)
 
     def test_creation_by_anon_user(self):
-        response = self.client.post(self.ADD_URL, data=self.note_form)
         expected_url = f'{self.LOGIN_URL}?next={self.ADD_URL}'
-        self.assertRedirects(response, expected_url)
-        self.assertEqual(Note.objects.count(), self.DEFAULT_NOTES_COUNT)
+        self.redirect_examination(
+            self.client,
+            self.ADD_URL,
+            self.note_form,
+            expected_url)
+        self.count_examination()
 
     def test_editing_by_author(self):
-        response = self.first_client.post(
+        self.redirect_examination(
+            self.author_client,
             self.EDIT_URL,
-            data=self.edit_form
+            self.edit_form,
+            self.SUCCESS_URL
         )
-        self.assertRedirects(response, self.SUCCESS_URL)
-        self.assertEqual(Note.objects.count(), self.DEFAULT_NOTES_COUNT)
+        self.count_examination()
         new_note = Note.objects.get()
-        self.assertEqual(new_note.title, self.edit_form['title'])
-        self.assertEqual(new_note.text, self.edit_form['text'])
-        self.assertEqual(new_note.slug, self.edit_form['slug'])
+        self.identity_verification(new_note, self.edit_form)
 
     def test_editing_by_other_user(self):
-        response = self.second_client.post(
+        self.redirect_examination(
+            self.auth_user_client,
             self.EDIT_URL,
-            data=self.edit_form
+            self.edit_form,
+            HTTPStatus.NOT_FOUND,
+            redirect=False
         )
-        self.assertEqual(response.status_code, HTTPStatus.NOT_FOUND)
         original_note = Note.objects.get(id=self.note.id)
         self.assertEqual(self.note.title, original_note.title)
         self.assertEqual(self.note.text, original_note.text)
         self.assertEqual(self.note.text, original_note.text)
 
     def test_deletion_by_author(self):
-        response = self.first_client.post(self.DELETE_URL)
+        response = self.author_client.post(self.DELETE_URL)
         self.assertRedirects(response, self.SUCCESS_URL)
-        self.assertEqual(Note.objects.count(), self.DEFAULT_NOTES_COUNT - 1)
+        self.count_examination(delete=True)
 
     def test_deletion_by_other_user(self):
-        response = self.second_client.post(self.DELETE_URL)
+        response = self.auth_user_client.post(self.DELETE_URL)
         self.assertEqual(response.status_code, HTTPStatus.NOT_FOUND)
-        self.assertEqual(Note.objects.count(), self.DEFAULT_NOTES_COUNT)
+        self.count_examination()
 
     def test_slug(self):
         self.note_form['slug'] = self.note.slug
-        response = self.first_client.post(
+        response = self.author_client.post(
             self.ADD_URL,
             data=self.note_form
         )
@@ -108,16 +100,17 @@ class TestLogic(TestCase):
             'slug',
             errors=(self.note.slug + WARNING)
         )
-        self.assertEqual(Note.objects.count(), self.DEFAULT_NOTES_COUNT)
+        self.count_examination()
 
     def test_slugify(self):
         self.note_form.pop('slug')
-        response = self.first_client.post(
+        self.redirect_examination(
+            self.author_client,
             self.ADD_URL,
-            data=self.note_form
+            self.note_form,
+            self.SUCCESS_URL
         )
-        self.assertRedirects(response, self.SUCCESS_URL)
-        self.assertEqual(Note.objects.count(), self.DEFAULT_NOTES_COUNT + 1)
+        self.count_examination(create=True)
         new_note = Note.objects.order_by('id').last()
         expected_slug = slugify(self.note_form['title'])
         self.assertEqual(new_note.slug, expected_slug)
