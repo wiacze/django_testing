@@ -2,17 +2,23 @@ from http import HTTPStatus
 from random import choice
 
 import pytest
-from news.forms import BAD_WORDS, WARNING
-from news.models import Comment
-from news.pytest_tests.conftest import COMMENT_TEXT
 from pytest_django.asserts import assertFormError, assertRedirects
 
-NEW_COMMENT_TEXT = 'Новый текст комментария'
-form_data = {'text': NEW_COMMENT_TEXT}
+from news.forms import BAD_WORDS, WARNING
+from news.models import Comment
+from news.pytest_tests.conftest import (
+    COMMENT_TEXT, NEW_COMMENT_TEXT, form_data
+)
 
 
 def comments_before_request():
     return Comment.objects.count()
+
+
+def comment_examination(comment, news, author, comment_creation_time):
+    assert comment.author == author
+    assert comment.news == news
+    assert comment.created == comment_creation_time
 
 
 @pytest.mark.django_db
@@ -79,21 +85,25 @@ def test_author_can_edit_comment(
     edit_comment_url,
     detail_url,
     comment,
-    author_client
+    author_client,
+    news, author, comment_creation_time
 ):
     response = author_client.post(edit_comment_url, data=form_data)
     assertRedirects(response, f'{detail_url}#comments')
     comment.refresh_from_db()
     assert comment.text == NEW_COMMENT_TEXT
+    comment_examination(comment, news, author, comment_creation_time)
 
 
 @pytest.mark.django_db
 def test_user_cant_edit_comment_of_another_user(
     edit_comment_url,
     comment,
-    admin_client
+    admin_client,
+    news, author, comment_creation_time
 ):
     response = admin_client.post(edit_comment_url, data=form_data)
     assert response.status_code == HTTPStatus.NOT_FOUND
     comment.refresh_from_db()
     assert comment.text == COMMENT_TEXT
+    comment_examination(comment, news, author, comment_creation_time)

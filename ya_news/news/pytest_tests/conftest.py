@@ -5,10 +5,13 @@ import pytest
 from django.conf import settings
 from django.urls import reverse
 from django.utils import timezone
+
 from news.models import Comment, News
 
 
 COMMENT_TEXT = 'Текст комментария'
+NEW_COMMENT_TEXT = 'Новый текст комментария'
+form_data = {'text': NEW_COMMENT_TEXT}
 
 
 @pytest.fixture
@@ -53,6 +56,11 @@ def comment(news, author):
         text=COMMENT_TEXT,
     )
     return comment
+
+
+@pytest.fixture
+def comment_creation_time(comment):
+    return comment.created
 
 
 @pytest.fixture
